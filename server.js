@@ -13,6 +13,7 @@ import rateLimit from "express-rate-limit";
 import upload from "./utils/multer.js";
 import cloudinary from "./utils/cloudinary.js";
 import UserPayment from "./Models/UserPayment.js";
+import nodemailer from "nodemailer";
 
 import dotenv from "dotenv";
 dotenv.config();
@@ -35,7 +36,6 @@ app.use(express.json());
 app.use("/api/admin", adminRoutes);
 app.use(express.json({ limit: "10mb" })); //
 
-
 const authLimiter = rateLimit({
   windowMs: 10 * 60 * 1000, // 10 minutes
   max: 5, // Limit each IP to 5 requests per `window`
@@ -44,7 +44,6 @@ const authLimiter = rateLimit({
 
 app.use("/login", authLimiter);
 app.use("/register", authLimiter);
-
 
 // app.use("/api/boards", boardRoutes);
 
@@ -128,44 +127,52 @@ app.post("/login", async (req, res) => {
 
 // const storage = multer.memoryStorage();
 
-app.patch("/upload", upload.fields([{ name: "qr1" }, { name: "qr2" }]), async (req, res) => {
-  try {
-    let uploadQr1 = null;
-    let uploadQr2 = null;
+app.patch(
+  "/upload",
+  upload.fields([{ name: "qr1" }, { name: "qr2" }]),
+  async (req, res) => {
+    try {
+      let uploadQr1 = null;
+      let uploadQr2 = null;
 
-    if (req.files["qr1"]) {
-      const result = await cloudinary.uploader.upload(req.files["qr1"][0].path);
-      uploadQr1 = result.secure_url;
+      if (req.files["qr1"]) {
+        const result = await cloudinary.uploader.upload(
+          req.files["qr1"][0].path
+        );
+        uploadQr1 = result.secure_url;
+      }
+
+      if (req.files["qr2"]) {
+        const result = await cloudinary.uploader.upload(
+          req.files["qr2"][0].path
+        );
+        uploadQr2 = result.secure_url;
+      }
+
+      const updateData = {};
+      if (uploadQr1) updateData.qr1 = uploadQr1;
+      if (uploadQr2) updateData.qr2 = uploadQr2;
+
+      // Force upsert (update if exists, insert if not)
+      const updatedQr = await Qr.findOneAndUpdate(
+        {},
+        { $set: updateData },
+        { new: true, upsert: true }
+      );
+
+      console.log("qr1:", updatedQr.qr1, "qr2:", updatedQr.qr2);
+
+      res.status(200).json({
+        message: "QR codes updated successfully",
+        qr1: updatedQr.qr1,
+        qr2: updatedQr.qr2,
+      });
+    } catch (error) {
+      console.error("QR Upload Error:", error);
+      res.status(500).json({ message: "QR upload failed", error });
     }
-
-    if (req.files["qr2"]) {
-      const result = await cloudinary.uploader.upload(req.files["qr2"][0].path);
-      uploadQr2 = result.secure_url;
-    }
-
-    const updateData = {};
-    if (uploadQr1) updateData.qr1 = uploadQr1;
-    if (uploadQr2) updateData.qr2 = uploadQr2;
-
-    // Force upsert (update if exists, insert if not)
-    const updatedQr = await Qr.findOneAndUpdate(
-      {},                    
-      { $set: updateData },
-      { new: true, upsert: true }
-    );
-
-    console.log("qr1:", updatedQr.qr1, "qr2:", updatedQr.qr2);
-
-    res.status(200).json({
-      message: "QR codes updated successfully",
-      qr1: updatedQr.qr1,
-      qr2: updatedQr.qr2,
-    });
-  } catch (error) {
-    console.error("QR Upload Error:", error);
-    res.status(500).json({ message: "QR upload failed", error });
   }
-});
+);
 
 // get Qr Codes
 
@@ -183,50 +190,124 @@ app.get("/api/qrcodes", async (req, res) => {
 });
 
 // user payment data...
-app.post('/api/submit-payment', upload.single('screenshot'), async (req, res) => {
-  try {
-    const {
-      name,
-      email,
-      phone,
-      utr,
-      plan,
-      status,
-      submittedAt,
-      loggedInEmail
-    } = req.body;
+app.post(
+  "/api/submit-payment",
+  upload.single("screenshot"),
+  async (req, res) => {
+    try {
+      const {
+        name,
+        email,
+        phone,
+        utr,
+        plan,
+        status,
+        submittedAt,
+        loggedInEmail,
+      } = req.body;
 
-    if (!req.file) {
-      return res.status(400).json({ message: "Screenshot is required." });
+      if (!req.file) {
+        return res.status(400).json({ message: "Screenshot is required." });
+      }
+
+      // Upload file to Cloudinary
+      const cloudRes = await cloudinary.uploader.upload(req.file.path, {
+        folder: "paymentScreenshots",
+      });
+
+      // Save data with Cloudinary URL
+      const newPayment = new UserPayment({
+        name,
+        email,
+        phone,
+        utr,
+        plan,
+        status,
+        submittedAt: new Date(submittedAt),
+        screenshotPath: cloudRes.secure_url,
+        loggedInEmail,
+      });
+
+      await newPayment.save();
+
+      console.log("Uploaded URL:", cloudRes.secure_url);
+
+      res.status(201).json({ message: "Payment submitted successfully." });
+    } catch (error) {
+      console.error("Submit Payment Error:", error);
+      res
+        .status(500)
+        .json({ message: "Backend error from submit payments..." });
     }
-
-    // Upload file to Cloudinary
-    const cloudRes = await cloudinary.uploader.upload(req.file.path, {
-      folder: 'paymentScreenshots'
-    });
-
-    // Save data with Cloudinary URL
-    const newPayment = new UserPayment({
-      name,
-      email,
-      phone,
-      utr,
-      plan,
-      status,
-      submittedAt: new Date(submittedAt),
-      screenshotPath: cloudRes.secure_url,
-      loggedInEmail,
-    });
-
-    await newPayment.save();
-
-    console.log("Uploaded URL:", cloudRes.secure_url);
-
-    res.status(201).json({ message: "Payment submitted successfully." });
-  } catch (error) {
-    console.error("Submit Payment Error:", error);
-    res.status(500).json({ message: "Backend error from submit payments..." });
   }
+);
+
+// mail send on form submission
+
+app.post("/contact-form", (req, res) => {
+  const { firstName, lastName, email, phone, message } = req.body;
+
+  // Debug log
+  console.log("📨 Contact form submitted:", {
+    firstName,
+    lastName,
+    email,
+    phone,
+    message,
+  });
+
+  const transporter = nodemailer.createTransport({
+    service: "gmail",
+    auth: {
+      user: process.env.EMAIL_USER, // Your Gmail email address
+      pass: process.env.EMAIL_PASS, // App password (not your Gmail password)
+    },
+  });
+
+  const mailOptions = {
+    from: `"${firstName} ${lastName}" <${process.env.EMAIL_USER}>`,
+    to: process.env.EMAIL_USER,
+    subject: "📬 New Contact Form Submission Received",
+    replyTo: email, // So you can reply directly from Gmail
+    text: `
+You have received a new message from your website contact form:
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+👤 Name: ${firstName} ${lastName}
+📧 Email: ${email}
+📱 Phone: ${phone}
+💬 Message:
+${message}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+This message was submitted via the contact form on your website.
+    `,
+  };
+
+  transporter.sendMail(mailOptions, (error, info) => {
+    if (error) {
+      console.error("❌ Email sending failed:", error);
+      return res
+        .status(500)
+        .json({
+          success: false,
+          message: "Failed to send email. Please try again later.",
+        });
+    } else {
+      console.log("✅ Email sent:", info.response);
+      return res
+        .status(200)
+        .json({
+          success: true,
+          message: "Thank you! Your message has been sent successfully.",
+        });
+    }
+  });
+});
+
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
 });
 
 // get status from email...
@@ -246,7 +327,6 @@ app.get("/by-email/:email", async (req, res) => {
   }
 });
 
-
 // user ScreenShot Upload...
 
 app.post("/upload-image", upload.single("image"), (req, res) => {
@@ -256,7 +336,6 @@ app.post("/upload-image", upload.single("image"), (req, res) => {
     res.status(500).json({ message: "Image upload failed" });
   }
 });
-
 
 // update the status of user...
 
@@ -285,9 +364,9 @@ app.post("/upload-image", upload.single("image"), (req, res) => {
 //   }
 // });
 
-// update the status of payment 
+// update the status of payment
 
-app.patch('/update-paymentstatus', async (req, res) => {
+app.patch("/update-paymentstatus", async (req, res) => {
   const { id, status } = req.body;
 
   // Check for required fields
@@ -312,16 +391,11 @@ app.patch('/update-paymentstatus', async (req, res) => {
       message: "Payment status updated successfully",
       data: updatedUser,
     });
-
   } catch (error) {
     console.error("Error updating user status:", error);
     return res.status(500).json({ message: "Internal server error" });
   }
 });
-
-
-
-
 
 // Get logged-in user's data
 app.get("/me", authenticateToken, async (req, res) => {
@@ -330,7 +404,9 @@ app.get("/me", authenticateToken, async (req, res) => {
     if (!user) return res.status(404).json({ message: "User not found" });
     res.status(200).json(user);
   } catch (err) {
-    res.status(500).json({ message: "Server error from getting userDetails..." });
+    res
+      .status(500)
+      .json({ message: "Server error from getting userDetails..." });
   }
 });
 
