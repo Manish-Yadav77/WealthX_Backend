@@ -328,6 +328,45 @@ app.post("/upload-image", upload.single("image"), (req, res) => {
   }
 });
 
+
+// user payment status and details for logged in users...
+
+app.get("/api/userinfo", async (req, res) => {
+
+  const email = req.query.email;
+  if (!email) return res.status(400).json({ error: "Email query parameter is required" });
+
+  try {
+    // Find all payment records for the email
+    const userInfo = await UserPayment.find({ email: email.toLowerCase() });
+
+    if (!userInfo || userInfo.length === 0)
+      return res.status(404).json({ error: "User info not found" });
+
+    // Map to select only relevant fields for each record
+    const filteredInfo = userInfo.map((record) => ({
+      _id: record._id,
+      name: record.name,
+      email: record.email,
+      phone: record.phone,
+      utr: record.utr,
+      plan: record.plan,
+      status: record.status,
+      submittedAt: record.submittedAt,
+      screenshotPath: record.screenshotPath,
+      loggedInEmail: record.loggedInEmail,
+    }));
+
+    res.json(filteredInfo);
+  } catch (error) {
+    console.error("Error fetching user info:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+
+
+
 // update the status of user...
 
 // app.patch('/update-userstatus', async (req, res) => {
