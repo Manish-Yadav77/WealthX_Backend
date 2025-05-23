@@ -34,16 +34,7 @@ app.use(
 app.use(express.json());
 
 app.use("/api/admin", adminRoutes);
-app.use(express.json({ limit: "10mb" })); //
 
-const authLimiter = rateLimit({
-  windowMs: 10 * 60 * 1000, // 10 minutes
-  max: 5, // Limit each IP to 5 requests per `window`
-  message: "Too many attempts, please try again later.",
-});
-
-app.use("/login", authLimiter);
-app.use("/register", authLimiter);
 
 // app.use("/api/boards", boardRoutes);
 
